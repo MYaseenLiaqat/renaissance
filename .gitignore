@@ -1,0 +1,41 @@
+@'
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+.venv*/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Frontend
+node_modules/
+dist/
+coverage/
+
+# Databases and local data
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+/apps/tangled/backend/data/
+/services/ai-learning-research/backend/data/
+
+# Local uploads and participant exports
+participant_exports/
+participant_data/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+'@ | Set-Content -Path "$root\.gitignore" -Encoding utf8
