@@ -7,11 +7,14 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, VerificationError
 from ..adapters.jobs import FastAPIJobs
 from ..config import settings
 from ..db import session
 from ..deps import current_student
-from ..models import AnalysisJob, Concept, Course, Material, Message, Student
+from ..models import AnalysisJob, Concept, Course, LearnerMap, Material, Message, Student
+from ..research_client import create_research_learner, research_request
 from ..services import rag
 from ..services import analysis
 from ..services.tokens import signed_material_url, student_token, valid_material_signature
@@ -19,11 +22,24 @@ from ..services.rate_limit import client_ip, enforce
 
 router = APIRouter()
 logger = logging.getLogger("tangled.student")
+passwords = PasswordHasher()
 
 
 class JoinIn(BaseModel):
     code: str = Field(min_length=6, max_length=6)
     consent: bool
+
+
+class StudentCredentials(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8)
+    code: str = Field(min_length=6, max_length=6)
+    consent: bool
+
+
+class StudentLogin(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8)
 
 
 class ChatIn(BaseModel):
@@ -34,6 +50,85 @@ class ChatIn(BaseModel):
 class FeedbackIn(BaseModel):
     message_id: int
     value: str
+
+
+class ResearchSubmission(BaseModel):
+    code: str = Field(min_length=1, max_length=20000)
+
+
+def _student_response(student: Student, course: Course) -> dict:
+    return {
+        "access_token": student_token(student.id, course.id),
+        "token_type": "bearer",
+        "course_id": course.id,
+        "course_name": course.name,
+    }
+
+
+def _create_mapping(student: Student, s: Session) -> LearnerMap:
+    existing = s.exec(select(LearnerMap).where(LearnerMap.user_id == student.id)).first()
+    if existing:
+        return existing
+    result = create_research_learner(idempotency_key=f"tangled-student-{student.id}")
+    mapping = LearnerMap(
+        user_id=student.id,
+        research_learner_id=int(result["id"]),
+        research_learner_token=str(result.get("provisioning_token", "")),
+    )
+    s.add(mapping)
+    try:
+        s.commit()
+    except Exception:
+        s.rollback()
+        existing = s.exec(select(LearnerMap).where(LearnerMap.user_id == student.id)).first()
+        if existing:
+            return existing
+        raise HTTPException(503, "Could not persist research learner mapping.")
+    s.refresh(mapping)
+    return mapping
+
+
+@router.post("/register")
+def register_student(body: StudentCredentials, request: Request, s: Session = Depends(session)):
+    if not body.consent:
+        raise HTTPException(400, "Consent is required")
+    course = s.exec(select(Course).where(Course.join_code == body.code.upper())).first()
+    if not course or not course.joining_open:
+        raise HTTPException(404, "Course not found or joining is closed")
+    email = body.email.lower()
+    if s.exec(select(Student).where(Student.email == email)).first():
+        raise HTTPException(409, "Email already registered")
+    student = Student(
+        course_id=course.id,
+        email=email,
+        password_hash=passwords.hash(body.password),
+        consent_version=settings.consent_version,
+    )
+    s.add(student)
+    try:
+        s.commit()
+    except Exception:
+        s.rollback()
+        raise HTTPException(409, "Email already registered")
+    s.refresh(student)
+    _create_mapping(student, s)
+    return _student_response(student, course)
+
+
+@router.post("/login")
+def login_student(body: StudentLogin, s: Session = Depends(session)):
+    student = s.exec(select(Student).where(Student.email == body.email.lower())).first()
+    if not student or not student.password_hash:
+        raise HTTPException(401, "Invalid email or password")
+    try:
+        passwords.verify(student.password_hash, body.password)
+    except (VerifyMismatchError, VerificationError):
+        raise HTTPException(401, "Invalid email or password")
+    course = s.get(Course, student.course_id)
+    if not course:
+        raise HTTPException(401, "Invalid student account")
+    _create_mapping(student, s)
+    return _student_response(student, course)
 
 
 @router.get("/join/{code}")
@@ -58,8 +153,7 @@ def join(body: JoinIn, request: Request, s: Session = Depends(session)):
     s.add(student)
     s.commit()
     s.refresh(student)
-    return {"access_token": student_token(student.id, course.id), "token_type": "bearer",
-            "course_id": course.id, "course_name": course.name}
+    return _student_response(student, course)
 
 
 def student_material(material: Material, student: Student) -> dict:
@@ -165,3 +259,45 @@ def feedback(body: FeedbackIn, st: Student = Depends(current_student), s: Sessio
     s.add(message)
     s.commit()
     return {"ok": True}
+
+
+def _research_mapping(student: Student, s: Session) -> LearnerMap:
+    mapping = s.exec(select(LearnerMap).where(LearnerMap.user_id == student.id)).first()
+    if not mapping:
+        raise HTTPException(409, "Complete student registration before opening research activities.")
+    return mapping
+
+
+@router.get("/research/loops")
+def research_loops(st: Student = Depends(current_student), s: Session = Depends(session)):
+    mapping = _research_mapping(st, s)
+    return research_request("GET", "/learning/loops", mapping)
+
+
+@router.post("/research/loops/start")
+def research_loops_start(st: Student = Depends(current_student), s: Session = Depends(session)):
+    mapping = _research_mapping(st, s)
+    return research_request("POST", "/learning/loops/start", mapping)
+
+
+@router.get("/research/tasks")
+def research_tasks(st: Student = Depends(current_student), s: Session = Depends(session)):
+    mapping = _research_mapping(st, s)
+    return research_request("GET", "/tasks/learner/" + str(mapping.research_learner_id), mapping)
+
+
+@router.post("/research/tasks/{task_id}/start")
+def research_task_start(task_id: int, st: Student = Depends(current_student), s: Session = Depends(session)):
+    mapping = _research_mapping(st, s)
+    return research_request("POST", f"/tasks/{task_id}/start", mapping)
+
+
+@router.post("/research/tasks/{task_id}/submit")
+def research_task_submit(
+    task_id: int,
+    body: ResearchSubmission,
+    st: Student = Depends(current_student),
+    s: Session = Depends(session),
+):
+    mapping = _research_mapping(st, s)
+    return research_request("POST", f"/tasks/{task_id}/submit", mapping, body.model_dump())

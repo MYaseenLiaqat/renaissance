@@ -18,6 +18,8 @@ class Learner(Base):
     ai_interaction_cap: Mapped[int | None] = mapped_column(Integer, nullable=True)
     supported_phase_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     participation_status: Mapped[str] = mapped_column(String(20), default="active")
+    idempotency_key: Mapped[str | None] = mapped_column(String(200), unique=True, nullable=True)
+    learner_access_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     attempts = relationship("Attempt", back_populates="learner")
 
 class Concept(Base):

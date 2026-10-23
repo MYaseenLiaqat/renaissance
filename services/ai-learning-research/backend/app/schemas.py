@@ -18,6 +18,7 @@ class LearnerOut(BaseModel):
     ai_interaction_cap: int | None = None
     supported_phase_minutes: int | None = None
     participation_status: str = "active"
+    provisioning_token: str | None = None
 
 class TaskOut(BaseModel):
     id: int

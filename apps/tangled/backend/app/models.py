@@ -43,8 +43,20 @@ class Student(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     course_id: int = Field(foreign_key="course.id", index=True)
     code: str | None = Field(default=None, index=True, unique=True)
+    email: str | None = Field(default=None, index=True, unique=True)
+    password_hash: str | None = None
     consent_version: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class LearnerMap(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="student.id", unique=True, index=True)
+    research_learner_id: int = Field(unique=True, index=True)
+    research_learner_token: str = ""
+    research_participation_status: str = "active"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Message(SQLModel, table=True):

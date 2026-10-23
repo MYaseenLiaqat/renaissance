@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
@@ -14,9 +14,10 @@ from app.services.scheduler import (
     supported_expiry,
 )
 from app.services.provenance import FrozenProvenanceError, require_common_provenance
+from app.services.renaissance_auth import require_learner_access, require_renaissance_service
 from app.services.learning_material import get_learning_module
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_renaissance_service)])
 
 
 def task_out(a, db):
@@ -40,7 +41,7 @@ def task_out(a, db):
 
 
 @router.get("/learner/{learner_id}", response_model=list[TaskOut])
-def get_due_tasks(learner_id: int, db: Session = Depends(get_db)):
+def get_due_tasks(learner_id: int, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
     """Return available tasks.
 
     Viewing tasks does NOT start the Supported-session timer.
@@ -49,6 +50,7 @@ def get_due_tasks(learner_id: int, db: Session = Depends(get_db)):
     learner = db.get(Learner, learner_id)
     if not learner:
         raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
     try:
         require_common_provenance(learner)
         get_learning_module(learner.learning_module_version)
@@ -75,10 +77,11 @@ def get_due_tasks(learner_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{task_id}/start", response_model=TaskStartOut)
-def start_assessment(task_id: int, learner_id: int, db: Session = Depends(get_db)):
+def start_assessment(task_id: int, learner_id: int, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
     learner = db.get(Learner, learner_id)
     if not learner:
         raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
     try:
         require_common_provenance(learner)
         get_learning_module(learner.learning_module_version)
@@ -113,10 +116,11 @@ def start_assessment(task_id: int, learner_id: int, db: Session = Depends(get_db
 
 
 @router.post("/{task_id}/submit", response_model=SubmitOut)
-def submit_task(task_id: int, learner_id: int, payload: SubmitRequest, db: Session = Depends(get_db)):
+def submit_task(task_id: int, learner_id: int, payload: SubmitRequest, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
     learner = db.get(Learner, learner_id)
     if not learner:
         raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
     try:
         require_common_provenance(learner)
         get_learning_module(learner.learning_module_version)

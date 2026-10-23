@@ -1,9 +1,11 @@
 import logging
 from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from pydantic import SecretStr
 
 class Settings(BaseSettings):
+    research_service_url: str = "http://127.0.0.1:8001"
+    research_service_token: SecretStr = SecretStr("")
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     database_url: str = "sqlite:///./data/tangled.db"
     env: str = "dev"

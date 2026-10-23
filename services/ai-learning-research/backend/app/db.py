@@ -49,6 +49,14 @@ def _apply_lightweight_migrations():
                 conn.exec_driver_sql(
                     f"ALTER TABLE learners ADD COLUMN {name} {definition}"
                 )
+        if "idempotency_key" not in learner_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE learners ADD COLUMN idempotency_key VARCHAR(200)"
+            )
+        if "learner_access_token_hash" not in learner_cols:
+            conn.exec_driver_sql(
+                "ALTER TABLE learners ADD COLUMN learner_access_token_hash VARCHAR(64)"
+            )
         task_cols = {c["name"] for c in inspector.get_columns("tasks")}
         if "version" not in task_cols:
             conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN version VARCHAR(30)")

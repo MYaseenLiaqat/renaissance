@@ -1,8 +1,11 @@
 import random
+import secrets
+import hashlib
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from app.db import get_db
 from app.config import settings
 from app.models import Attempt, Learner
@@ -11,11 +14,22 @@ from app.services.scheduler import is_supported_completed_or_expired, seed_attem
 from app.services.learning_material import get_learning_module
 from app.routers.ai import get_system_prompt, KNOWN_AI_PROVIDERS
 from app.services.provenance import FrozenProvenanceError, require_common_provenance
+from app.services.renaissance_auth import require_learner_access, require_renaissance_service
+router = APIRouter(dependencies=[Depends(require_renaissance_service)])
 
-router = APIRouter()
-
-@router.post("", response_model=LearnerOut)
-def create_learner(payload: LearnerCreate, db: Session = Depends(get_db)):
+@router.post(
+    "",
+    response_model=LearnerOut,
+)
+def create_learner(
+    payload: LearnerCreate,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+):
+    if idempotency_key:
+        existing = db.query(Learner).filter_by(idempotency_key=idempotency_key).first()
+        if existing:
+            return existing
     condition = random.choice(["no_ai", "controlled_ai"])
     try:
         get_learning_module(settings.learning_module_version)
@@ -31,6 +45,7 @@ def create_learner(payload: LearnerCreate, db: Session = Depends(get_db)):
             raise FrozenProvenanceError("Configured Supported duration is invalid")
     except (KeyError, FrozenProvenanceError) as exc:
         raise HTTPException(503, str(exc))
+    provisioning_token = secrets.token_urlsafe(32)
     learner = Learner(
         prior_ability_score=payload.prior_ability_score,
         condition=condition,
@@ -49,11 +64,22 @@ def create_learner(payload: LearnerCreate, db: Session = Depends(get_db)):
         ),
         supported_phase_minutes=settings.supported_phase_minutes,
         participation_status="active",
+        idempotency_key=idempotency_key,
+        learner_access_token_hash=hashlib.sha256(provisioning_token.encode()).hexdigest(),
     )
     db.add(learner)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if idempotency_key:
+            existing = db.query(Learner).filter_by(idempotency_key=idempotency_key).first()
+            if existing:
+                return existing
+        raise HTTPException(503, "Learner provisioning could not be completed safely.")
     db.refresh(learner)
     seed_attempts(db, learner)
+    learner.provisioning_token = provisioning_token
     return learner
 
 class LearnerStatusOut(BaseModel):
@@ -64,15 +90,16 @@ class LearnerStatusOut(BaseModel):
 
 
 @router.get("/{learner_id}", response_model=LearnerOut)
-def get_learner(learner_id: int, db: Session = Depends(get_db)):
+def get_learner(learner_id: int, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
     learner = db.get(Learner, learner_id)
     if not learner:
         raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
     return learner
 
 
 @router.get("/{learner_id}/status", response_model=LearnerStatusOut)
-def get_learner_status(learner_id: int, db: Session = Depends(get_db)):
+def get_learner_status(learner_id: int, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
     """Return whether the learner has future scheduled assessments.
 
     Used by the frontend to distinguish "return later" (future assessment
@@ -81,6 +108,7 @@ def get_learner_status(learner_id: int, db: Session = Depends(get_db)):
     learner = db.get(Learner, learner_id)
     if not learner:
         raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
     try:
         require_common_provenance(learner)
     except FrozenProvenanceError as exc:

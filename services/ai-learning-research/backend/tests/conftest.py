@@ -1,3 +1,4 @@
+
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.config import settings
 from app.db import Base, get_db
 from app.main import app
 from app.models import Learner, Concept, Task, Attempt
@@ -22,18 +24,32 @@ def db_session():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    Base.metadata.create_all(bind=engine)
-    TestingSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    TestingSession = sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+    )
     session = TestingSession()
+    Base.metadata.create_all(bind=engine)
+
     try:
         yield session
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)
+        engine.dispose()
 
 
 @pytest.fixture()
-def client(db_session):
+def client(db_session, monkeypatch):
+    test_token = "test-renaissance-service-token"
+
+    monkeypatch.setattr(
+        settings,
+        "renaissance_service_token",
+        test_token,
+    )
+
     def override_get_db():
         try:
             yield db_session
@@ -41,67 +57,96 @@ def client(db_session):
             pass
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
+
+    try:
+        with TestClient(
+            app,
+            headers={
+                "X-Renaissance-Service-Token": test_token,
+            },
+        ) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
 
 
 @pytest.fixture()
 def concept(db_session):
-    c = Concept(name="Loops", order=1)
-    db_session.add(c)
+    concept = Concept(name="Loops", order=1)
+    db_session.add(concept)
     db_session.commit()
-    db_session.refresh(c)
-    return c
+    db_session.refresh(concept)
+    return concept
 
 
 @pytest.fixture()
 def make_task(db_session, concept):
     def _make_task(task_type, offset_days=0):
-        t = Task(
+        task = Task(
             concept_id=concept.id,
             type=task_type,
             prompt_text=f"Task {task_type}",
-            grading_spec={"tests": [
-                {"expression": "add(1,2)", "expected": 3},
-            ]},
+            grading_spec={
+                "tests": [
+                    {
+                        "expression": "add(1,2)",
+                        "expected": 3,
+                    },
+                ],
+            },
             scheduled_offset_days=offset_days,
             version="0.5.0",
         )
-        db_session.add(t)
+        db_session.add(task)
         db_session.commit()
-        db_session.refresh(t)
-        return t
+        db_session.refresh(task)
+        return task
+
     return _make_task
 
 
 @pytest.fixture()
 def make_learner(db_session):
     def _make_learner(condition="controlled_ai"):
-        l = Learner(
+        learner = Learner(
             prior_ability_score=0.5,
             condition=condition,
             measurement_arm="full",
             study_protocol_version="v0.3",
             learning_module_version="v0.6.0",
-            system_prompt_version="0.6.0" if condition == "controlled_ai" else None,
-            ai_provider="groq" if condition == "controlled_ai" else None,
-            ai_model="fake-model" if condition == "controlled_ai" else None,
-            ai_interaction_cap=8 if condition == "controlled_ai" else None,
+            system_prompt_version=(
+                "0.6.0" if condition == "controlled_ai" else None
+            ),
+            ai_provider=(
+                "groq" if condition == "controlled_ai" else None
+            ),
+            ai_model=(
+                "fake-model" if condition == "controlled_ai" else None
+            ),
+            ai_interaction_cap=(
+                8 if condition == "controlled_ai" else None
+            ),
             supported_phase_minutes=20,
             participation_status="active",
         )
-        db_session.add(l)
+        db_session.add(learner)
         db_session.commit()
-        db_session.refresh(l)
-        return l
+        db_session.refresh(learner)
+        return learner
+
     return _make_learner
 
 
 @pytest.fixture()
 def make_attempt(db_session):
-    def _make_attempt(learner, task, scheduled_for=None, completed_at=None, started_at=None):
-        a = Attempt(
+    def _make_attempt(
+        learner,
+        task,
+        scheduled_for=None,
+        completed_at=None,
+        started_at=None,
+    ):
+        attempt = Attempt(
             learner_id=learner.id,
             task_id=task.id,
             scheduled_for=scheduled_for or datetime.utcnow(),
@@ -109,8 +154,9 @@ def make_attempt(db_session):
             started_at=started_at,
             task_version=task.version,
         )
-        db_session.add(a)
+        db_session.add(attempt)
         db_session.commit()
-        db_session.refresh(a)
-        return a
+        db_session.refresh(attempt)
+        return attempt
+
     return _make_attempt

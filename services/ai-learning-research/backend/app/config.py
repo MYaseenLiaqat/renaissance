@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    renaissance_service_token: str = ""
     database_url: str = "sqlite:///./research.db"
     study_protocol_version: str = "v0.4"
     learning_module_version: str = "v0.6.0"

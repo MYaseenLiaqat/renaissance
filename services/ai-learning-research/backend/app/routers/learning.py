@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
@@ -8,12 +8,13 @@ from app.schemas import SessionStartOut
 from app.services.learning_material import get_learning_module
 from app.services.scheduler import mark_supported_expired, supported_expiry
 from app.services.provenance import FrozenProvenanceError, require_common_provenance
+from app.services.renaissance_auth import require_learner_access, require_renaissance_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_renaissance_service)])
 
 
 @router.get("/loops")
-def get_loops_module(learner_id: int, db: Session = Depends(get_db)):
+def get_loops_module(learner_id: int, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
     """Return the static Loops learning material.
 
     Does NOT start the Supported-session timer.
@@ -21,6 +22,7 @@ def get_loops_module(learner_id: int, db: Session = Depends(get_db)):
     learner = db.get(Learner, learner_id)
     if not learner:
         raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
     try:
         require_common_provenance(learner)
     except FrozenProvenanceError as exc:
@@ -34,7 +36,7 @@ def get_loops_module(learner_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/loops/start", response_model=SessionStartOut)
-def start_loops_session(learner_id: int, db: Session = Depends(get_db)):
+def start_loops_session(learner_id: int, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
     """Explicitly start the Supported-session timer.
 
     This is the ONLY event that starts the 20-minute Supported-session clock.
@@ -43,6 +45,7 @@ def start_loops_session(learner_id: int, db: Session = Depends(get_db)):
     learner = db.get(Learner, learner_id)
     if not learner:
         raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
     try:
         require_common_provenance(learner)
     except FrozenProvenanceError as exc:

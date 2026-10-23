@@ -1,15 +1,16 @@
 import httpx
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 from app.config import settings
+from app.services.renaissance_auth import require_learner_access, require_renaissance_service
 from app.db import get_db
 from app.models import Attempt, AIInteraction, Learner
 from app.schemas import AIChatRequest, AIChatOut
 from app.services.scheduler import mark_supported_expired, supported_expiry
 from app.services.provenance import FrozenProvenanceError, require_ai_provenance
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_renaissance_service)])
 
 SYSTEM_PROMPT_VERSION = "0.6.0"
 
@@ -383,7 +384,7 @@ def get_system_prompt(version: str):
     return prompt
 
 @router.post("/chat", response_model=AIChatOut)
-def chat(payload: AIChatRequest, db: Session = Depends(get_db)):
+def chat(payload: AIChatRequest, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
     attempt = db.get(Attempt, payload.attempt_id)
     if not attempt:
         raise HTTPException(404, "Attempt not found")
@@ -391,6 +392,7 @@ def chat(payload: AIChatRequest, db: Session = Depends(get_db)):
     learner = db.get(Learner, attempt.learner_id)
     if not learner:
         raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
     if learner.participation_status != "active":
         raise HTTPException(403, "Participation is withdrawn")
 
