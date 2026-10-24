@@ -15,12 +15,18 @@ class ChromaVectorStore:
     def add(self, ids, documents, embeddings, metadatas):
         self.collection.add(ids=ids, documents=documents, embeddings=embeddings, metadatas=metadatas)
 
-    def query(self, course_id, query, limit):
+    def query(self, course_id, query, limit, material_id: int | None = None):
         count = self.count()
         if not count:
             return []
-        result = self.collection.query(query_texts=[query], n_results=min(limit, count),
-                                       where={"course_id": course_id})
+        where_clause = {"course_id": course_id}
+        if material_id is not None:
+            where_clause = {"$and": [{"course_id": course_id}, {"material_id": material_id}]}
+        result = self.collection.query(
+            query_texts=[query],
+            n_results=min(limit, count),
+            where=where_clause,
+        )
         return [{"text": d, "meta": m, "sim": 1 - x}
                 for d, m, x in zip(result["documents"][0], result["metadatas"][0], result["distances"][0])]
 

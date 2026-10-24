@@ -1,4 +1,3 @@
-
 import uuid
 import httpx
 from fastapi import HTTPException
@@ -52,11 +51,18 @@ def research_request(method: str, path: str, mapping, payload: dict | None = Non
             params={"learner_id": mapping.research_learner_id},
             json=payload,
             headers=headers,
-            timeout=10.0,
+            timeout=50.0,
         )
         response.raise_for_status()
         return response.json()
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(exc.response.status_code, "Research service rejected the request.")
+        detail = "Research service rejected the request."
+        try:
+            body = exc.response.json()
+            if isinstance(body, dict) and "detail" in body:
+                detail = str(body["detail"])
+        except Exception:
+            pass
+        raise HTTPException(status_code=exc.response.status_code, detail=detail)
     except httpx.HTTPError:
         raise HTTPException(502, "Research service request failed.")

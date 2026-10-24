@@ -1,3 +1,5 @@
+import logging
+import time
 import httpx
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -11,6 +13,7 @@ from app.services.scheduler import mark_supported_expired, supported_expiry
 from app.services.provenance import FrozenProvenanceError, require_ai_provenance
 
 router = APIRouter(dependencies=[Depends(require_renaissance_service)])
+logger = logging.getLogger("research.ai")
 
 SYSTEM_PROMPT_VERSION = "0.6.0"
 
@@ -367,13 +370,30 @@ SYSTEM_PROMPT_REGISTRY = {
     "0.5.0": SYSTEM_PROMPT_050,
     SYSTEM_PROMPT_VERSION: SYSTEM_PROMPT,
 }
-KNOWN_AI_PROVIDERS = {"groq"}
-AI_PROVIDER_REGISTRY = {
-    "groq": lambda: {
-        "base_url": settings.llm_base_url,
+KNOWN_AI_PROVIDERS = {"groq", "gemini"}
+
+def _groq_config():
+    base_url = settings.llm_base_url or "https://api.groq.com/openai/v1"
+    return {
+        "base_url": base_url,
         "api_key": settings.llm_api_key,
         "timeout": settings.llm_timeout_seconds,
-    },
+    }
+
+def _gemini_config():
+    raw_base = settings.llm_base_url or "https://generativelanguage.googleapis.com/v1beta/openai"
+    normalized = raw_base.rstrip("/")
+    if not normalized.endswith("/openai"):
+        normalized = normalized + "/openai"
+    return {
+        "base_url": normalized,
+        "api_key": settings.llm_api_key,
+        "timeout": settings.llm_timeout_seconds,
+    }
+
+AI_PROVIDER_REGISTRY = {
+    "groq": _groq_config,
+    "gemini": _gemini_config,
 }
 
 
@@ -431,13 +451,24 @@ def chat(payload: AIChatRequest, x_renaissance_learner_token: str | None = Heade
 
     provider = AI_PROVIDER_REGISTRY.get(learner.ai_provider)
     if provider is None:
+        logger.warning(
+            "Controlled AI request rejected: AI provider '%s' is not registered. Registered providers: %s",
+            learner.ai_provider,
+            list(AI_PROVIDER_REGISTRY.keys()),
+        )
         raise HTTPException(503, "Frozen AI provider is not configured")
     try:
         system_prompt = get_system_prompt(learner.system_prompt_version)
     except KeyError as exc:
         raise HTTPException(503, str(exc))
     provider_config = provider()
-    if not (provider_config["base_url"] and provider_config["api_key"]):
+    if not (provider_config.get("base_url") and provider_config.get("api_key")):
+        logger.warning(
+            "Controlled AI request rejected: missing credentials for provider '%s' (base_url: %s, api_key present: %s). Configure LLM_API_KEY in research service environment.",
+            learner.ai_provider,
+            bool(provider_config.get("base_url")),
+            bool(provider_config.get("api_key")),
+        )
         raise HTTPException(status_code=503, detail="AI provider is not configured")
 
     spec = attempt.task.grading_spec or {}
@@ -467,17 +498,42 @@ def chat(payload: AIChatRequest, x_renaissance_learner_token: str | None = Heade
         ],
     }
 
-    try:
-        response = httpx.post(
-            provider_config["base_url"].rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {provider_config['api_key']}"},
-            json=body,
-            timeout=provider_config["timeout"],
-        )
-        response.raise_for_status()
-        answer = response.json()["choices"][0]["message"]["content"]
-    except Exception as exc:
-        raise HTTPException(502, f"AI provider error: {exc}")
+    answer = None
+    max_retries = 2
+    for attempt_idx in range(max_retries + 1):
+        try:
+            response = httpx.post(
+                provider_config["base_url"].rstrip("/") + "/chat/completions",
+                headers={"Authorization": f"Bearer {provider_config['api_key']}"},
+                json=body,
+                timeout=provider_config["timeout"],
+            )
+            response.raise_for_status()
+            answer = response.json()["choices"][0]["message"]["content"]
+            break
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code == 503 and attempt_idx < max_retries:
+                logger.warning("AI provider returned 503; retrying (attempt %d/%d)", attempt_idx + 1, max_retries)
+                time.sleep(1.2)
+                continue
+            logger.error("AI provider returned HTTP error %s", status_code)
+            if status_code == 503:
+                raise HTTPException(502, "AI provider is temporarily experiencing high demand. Please try again in a few moments.")
+            if status_code == 429:
+                raise HTTPException(502, "AI provider rate limit or quota exceeded. Please try again shortly.")
+            if status_code == 404:
+                raise HTTPException(502, f"AI model or endpoint not found on provider ({status_code}).")
+            raise HTTPException(502, f"AI provider error: {status_code}")
+        except httpx.TimeoutException:
+            logger.error("AI provider request timed out")
+            raise HTTPException(502, "AI provider request timed out. Please try again.")
+        except httpx.RequestError as exc:
+            logger.error("AI provider request failed: %s", exc)
+            raise HTTPException(502, "AI provider communication failure")
+        except Exception as exc:
+            logger.error("AI provider unexpected error: %s", type(exc).__name__)
+            raise HTTPException(502, f"AI provider error: {type(exc).__name__}")
 
     interaction = AIInteraction(
         attempt_id=attempt.id,

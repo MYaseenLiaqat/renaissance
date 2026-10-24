@@ -1,4 +1,3 @@
-
 import secrets
 import hashlib
 
@@ -25,10 +24,19 @@ def require_renaissance_service(
 
 
 def require_learner_access(learner, learner_token: str | None) -> None:
+    if not learner_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Learner authorization token is required.",
+        )
     if not learner.learner_access_token_hash:
-        return
-    if learner_token and not secrets.compare_digest(
-        hashlib.sha256(learner_token.encode()).hexdigest(),
-        learner.learner_access_token_hash,
-    ):
-        raise HTTPException(status_code=403, detail="Learner authorization is required.")
+        raise HTTPException(
+            status_code=403,
+            detail="Learner authorization is required.",
+        )
+    token_hash = hashlib.sha256(learner_token.encode("utf-8")).hexdigest()
+    if not secrets.compare_digest(token_hash, learner.learner_access_token_hash):
+        raise HTTPException(
+            status_code=403,
+            detail="Learner authorization is required.",
+        )

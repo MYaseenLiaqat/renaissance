@@ -132,3 +132,18 @@ def get_learner_status(learner_id: int, x_renaissance_learner_token: str | None 
         has_future_assessments=future is not None,
         next_assessment_at=future.scheduled_for if future else None,
     )
+
+
+@router.post("/{learner_id}/withdraw")
+def withdraw_learner(learner_id: int, x_renaissance_learner_token: str | None = Header(default=None), db: Session = Depends(get_db)):
+    """Withdraw a learner from the research study.
+
+    Marks participation_status as 'withdrawn' and prevents further research task tracking.
+    """
+    learner = db.get(Learner, learner_id)
+    if not learner:
+        raise HTTPException(404, "Learner not found")
+    require_learner_access(learner, x_renaissance_learner_token)
+    learner.participation_status = "withdrawn"
+    db.commit()
+    return {"ok": True, "learner_id": learner.id, "participation_status": "withdrawn"}

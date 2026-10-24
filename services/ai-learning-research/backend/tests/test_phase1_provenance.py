@@ -40,7 +40,7 @@ def test_new_learner_freezes_provenance(client, db_session, monkeypatch):
     assert learner["study_protocol_version"] == "v0.4"
     assert learner["learning_module_version"] == "v0.6.0"
     assert learner["system_prompt_version"] == SYSTEM_PROMPT_VERSION == "0.6.0"
-    assert learner["ai_provider"] == "groq"
+    assert learner["ai_provider"] == settings.llm_provider
     assert learner["ai_model"] == "frozen-model"
     assert learner["ai_interaction_cap"] == 8
     assert learner["supported_phase_minutes"] == 20
@@ -76,7 +76,9 @@ def test_runtime_changes_do_not_change_existing_learner(client, db_session, monk
     learner_id = response.json()["id"]
     expected = response.json()
     monkeypatch.setattr(settings, "llm_model", "new-model")
-    fetched = client.get(f"/learners/{learner_id}").json()
+    token = expected.get("provisioning_token")
+    headers = {"X-Renaissance-Learner-Token": token} if token else {}
+    fetched = client.get(f"/learners/{learner_id}", headers=headers).json()
     assert fetched["ai_model"] == expected["ai_model"]
 
 

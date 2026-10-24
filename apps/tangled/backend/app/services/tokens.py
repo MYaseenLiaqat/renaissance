@@ -12,7 +12,7 @@ def student_token(student_id: int, course_id: int) -> str:
 
 
 def signed_material_url(material_id: int, student_id: int) -> str:
-    expires = int(datetime.now(timezone.utc).timestamp()) + 300
+    expires = int(datetime.now(timezone.utc).timestamp()) + 7200
     value = f"{material_id}:{student_id}:{expires}"
     signature = hmac.new(settings.jwt_secret.encode(), value.encode(), hashlib.sha256).hexdigest()
     return f"/api/v1/student/materials/{material_id}/file?student_id={student_id}&expires={expires}&signature={signature}"

@@ -9,7 +9,21 @@ import TopicsSetup from "../pages/TopicsSetup";
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
-  return { ...actual, api: { insights: vi.fn(), topic: vi.fn(), quiz: vi.fn(), importQuiz: vi.fn(), topicList: vi.fn(), createTopic: vi.fn(), updateTopic: vi.fn(), deleteTopic: vi.fn() } };
+  return {
+    ...actual,
+    api: {
+      insights: vi.fn(),
+      topic: vi.fn(),
+      verdict: vi.fn().mockResolvedValue({ ok: true }),
+      quiz: vi.fn(),
+      importQuiz: vi.fn(),
+      topicList: vi.fn(),
+      createTopic: vi.fn(),
+      updateTopic: vi.fn(),
+      deleteTopic: vi.fn(),
+      courseSections: vi.fn().mockResolvedValue([]),
+    },
+  };
 });
 
 describe("dashboard", () => {
@@ -55,5 +69,84 @@ describe("dashboard", () => {
     cleanup();
     render(<MemoryRouter initialEntries={["/courses/1/setup"]}><Routes><Route path="/courses/:id/setup" element={<TopicsSetup />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("No topics yet.")).toBeInTheDocument();
+  });
+
+  it("renders evidence checks, highlighted phrases, tags, excluded questions, and instructor actions", async () => {
+    vi.mocked(api.topic).mockResolvedValue({
+      id: 9,
+      name: "While Loop Iteration",
+      module: "Control Flow",
+      description: "Students confuse loop scope and accumulator updates.",
+      confidence: "High",
+      tier: "needs_attention",
+      status: "review",
+      stats: {
+        enrolled: 96,
+        students_asked: 7,
+        students_confused: 6,
+        confusion_msgs: 6,
+        info_msgs: 1,
+        quiz_rate: 0.37,
+        min_students: 4,
+        course_quiz_avg: 0.69,
+      },
+      share: 0.062,
+      share_lower: 0.03,
+      signals: ["quiz correct rate below threshold"],
+      groups: [
+        {
+          title: "While Loop Counter Issues",
+          count: 6,
+          raw_count: 6,
+          description: "Variable increments omitted or misplaced.",
+          evidence_phrases: ["counter remain at 1"],
+          quotes: [
+            {
+              id: 13,
+              text: "Why does my counter remain at 1 inside the while loop?",
+              phrase: "counter remain at 1",
+              tag: "Misconception",
+            },
+            {
+              id: 14,
+              text: "My loop runs forever and the counter never passes 1.",
+              phrase: "loop runs forever",
+              tag: "Asked again after an answer",
+            },
+          ],
+        },
+      ],
+      not_counted_evidence: ["How do half-open intervals work in Python list slicing?"],
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/courses/4/topics/9"]}>
+        <Routes>
+          <Route path="/courses/:id/topics/:topicId" element={<TopicDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText("While Loop Iteration")).toBeInTheDocument();
+    expect(screen.getByText("Control Flow")).toBeInTheDocument();
+    expect(screen.getByText("High confidence")).toBeInTheDocument();
+
+    expect(screen.getByText(/Enough students\./)).toBeInTheDocument();
+    expect(screen.getByText(/6 of 7 students who asked showed confusion/)).toBeInTheDocument();
+    expect(screen.getByText(/Real confusion, not curiosity\./)).toBeInTheDocument();
+    expect(screen.getByText(/6 of 7 questions showed confusion/)).toBeInTheDocument();
+    expect(screen.getByText(/Related assessment evidence\./)).toBeInTheDocument();
+    expect(screen.getByText(/37% answered the related question correctly/)).toBeInTheDocument();
+
+    expect(screen.getByText("While Loop Counter Issues")).toBeInTheDocument();
+    expect(screen.getByText("counter remain at 1")).toBeInTheDocument();
+    expect(screen.getByText("Misconception")).toBeInTheDocument();
+    expect(screen.getByText("Asked again after an answer")).toBeInTheDocument();
+
+    expect(screen.getByText(/Not counted: 1 questions that only asked for information/)).toBeInTheDocument();
+    expect(screen.getByText(/How do half-open intervals work in Python list slicing\?/)).toBeInTheDocument();
+
+    const markBtn = screen.getByText("✓ Mark as Addressed in Class");
+    expect(markBtn).toBeInTheDocument();
   });
 });

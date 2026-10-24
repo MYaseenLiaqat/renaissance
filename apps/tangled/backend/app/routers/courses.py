@@ -11,7 +11,7 @@ from ..adapters.jobs import FastAPIJobs
 from ..config import settings
 from ..db import session
 from ..deps import current_instructor, get_owned_course
-from ..models import Concept, Course, Instructor, Material, QuizAggregate, Verdict
+from ..models import Concept, Course, Instructor, Material, QuizAggregate, Section, Student, Verdict
 from ..services import insights
 from ..services.ingest import EXT, KIND
 from ..services.materials import process_material, retag_course
@@ -94,6 +94,23 @@ def list_courses(instructor: Instructor = Depends(current_instructor), s: Sessio
 @router.get("/{course_id}")
 def get_course(course: Course = Depends(get_owned_course)):
     return output(course)
+
+
+@router.get("/{course_id}/sections")
+def list_sections(course: Course = Depends(get_owned_course), s: Session = Depends(session)):
+    sections = s.exec(select(Section).where(Section.course_id == course.id)).all()
+    results = []
+    for sec in sections:
+        count = len(s.exec(select(Student).where(Student.section_id == sec.id)).all())
+        results.append({
+            "id": sec.id,
+            "course_id": sec.course_id,
+            "name": sec.name,
+            "section_code": sec.section_code,
+            "enrolled": count,
+            "created_at": sec.created_at,
+        })
+    return results
 
 
 @router.patch("/{course_id}")

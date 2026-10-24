@@ -19,6 +19,14 @@ class Course(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class Section(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    course_id: int = Field(foreign_key="course.id", index=True)
+    name: str = Field(index=True)
+    section_code: str = Field(index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class Concept(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     course_id: int | None = Field(default=None, foreign_key="course.id", index=True)
@@ -42,6 +50,7 @@ class Material(SQLModel, table=True):
 class Student(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     course_id: int = Field(foreign_key="course.id", index=True)
+    section_id: int | None = Field(default=None, foreign_key="section.id", index=True)
     code: str | None = Field(default=None, index=True, unique=True)
     email: str | None = Field(default=None, index=True, unique=True)
     password_hash: str | None = None
@@ -50,6 +59,7 @@ class Student(SQLModel, table=True):
 
 
 class LearnerMap(SQLModel, table=True):
+    __tablename__ = "learner_map"
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="student.id", unique=True, index=True)
     research_learner_id: int = Field(unique=True, index=True)
@@ -63,6 +73,7 @@ class Message(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     course_id: int | None = Field(default=None, foreign_key="course.id", index=True)
     student_id: int = Field(foreign_key="student.id", index=True)
+    material_id: int | None = Field(default=None, foreign_key="material.id", index=True)
     session_id: str = ""
     text: str
     answer: str = ""

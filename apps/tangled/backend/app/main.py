@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import text
 from .config import settings
 from .db import engine, migrate
-from .routers import auth, courses, student
+from .routers import auth, courses, student, integrations
 
 
 class JsonFormatter(logging.Formatter):
@@ -56,9 +56,17 @@ async def request_logging(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
+    if request.url.path.startswith("/api/v1/student/materials/") and request.url.path.endswith("/file"):
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "frame-ancestors 'self' http://localhost:5173 http://localhost:8000 http://127.0.0.1:5173 http://127.0.0.1:8000; "
+            "style-src 'self' 'unsafe-inline'"
+        )
+    else:
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-src 'self' blob: http://localhost:5173 http://localhost:8000; style-src 'self' 'unsafe-inline'"
     response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; frame-src 'self' blob:; style-src 'self' 'unsafe-inline'"
     logger.info("%s %s %s %.3f", request.method, request.url.path, response.status_code,
                 time.perf_counter() - started, extra={"request_id": request_id})
     return response
@@ -67,6 +75,7 @@ async def request_logging(request: Request, call_next):
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(courses.router, prefix="/api/v1/courses", tags=["courses"])
 app.include_router(student.router, prefix="/api/v1/student", tags=["student"])
+app.include_router(integrations.router, prefix="/api/v1/integrations", tags=["integrations"])
 
 
 @app.get("/health/live")

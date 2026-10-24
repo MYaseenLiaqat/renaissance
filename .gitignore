@@ -1,8 +1,10 @@
-@'
 # Environment and secrets
 .env
 .env.*
 !.env.example
+demo_credentials.json
+DEMO_CREDENTIALS.md
+.demo_credentials.md
 
 # Python
 .venv/
@@ -38,4 +40,7 @@ participant_data/
 .idea/
 .DS_Store
 Thumbs.db
-'@ | Set-Content -Path "$root\.gitignore" -Encoding utf8
+
+# Local research database backups
+*.db.bak
+

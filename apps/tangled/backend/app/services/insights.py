@@ -148,16 +148,36 @@ async def _group_title(s: Session, concept: Concept, messages: list[Message]) ->
     return title
 
 
-async def groups(s: Session, concept: Concept, messages: list[Message]) -> list[dict]:
+async def groups(s: Session, concept: Concept, messages: list[Message], per_student: dict[int, int] | None = None) -> list[dict]:
     if not messages:
         return []
+    per_student = per_student or {}
     result = []
     for group in _cluster(messages):
+        quotes = []
+        for m in group:
+            text_lower = m.text.lower()
+            if m.misconception:
+                tag = "Misconception"
+            elif per_student.get(m.student_id, 0) >= 2:
+                tag = "Asked again after an answer"
+            elif any(w in text_lower for w in ["confus", "don't understand", "do not understand", "stuck"]) or m.feedback == "unclear":
+                tag = "Explicitly said they were confused"
+            else:
+                tag = "Misconception" if any(w in text_lower for w in ["why", "how", "should", "what"]) else "Confusion signal"
+            quotes.append({
+                "id": m.id,
+                "text": m.text,
+                "phrase": m.phrase[:settings.max_evidence_phrase_chars] if m.phrase else "",
+                "tag": tag,
+            })
         result.append({
             "title": await _group_title(s, concept, group),
             "count": _small_count(len(group)),
+            "raw_count": len(group),
             "evidence_phrases": [m.phrase[:settings.max_evidence_phrase_chars]
                                 for m in group if m.phrase][:3],
+            "quotes": quotes,
         })
     return result
 
@@ -175,16 +195,34 @@ async def detail(s: Session, course_id: int, concept_id: int) -> dict | None:
         select(Message).where(Message.course_id == course_id)).all()})
     enrolled = course.class_size if course and course.class_size else joined or settings.enrolled
     result = classify(stats, enrolled, settings.min_students, settings.quiz_low)
-    info = [m.phrase[:settings.max_evidence_phrase_chars] for m in s.exec(
+
+    # Course-wide average quiz correct rate for comparison baseline
+    all_course_quiz = s.exec(select(QuizAggregate).where(QuizAggregate.course_id == course_id)).all()
+    total_q = sum(row.count for row in all_course_quiz)
+    correct_q = sum(row.count for row in all_course_quiz if row.correct)
+    course_quiz_avg = round(correct_q / total_q, 3) if total_q else None
+
+    # Student question repetition map
+    per_student: dict[int, int] = defaultdict(int)
+    for message in confusion:
+        per_student[message.student_id] += 1
+
+    info_messages = s.exec(
         select(Message).where(Message.course_id == course_id,
                               Message.concept_id == concept_id,
-                              Message.intent == "information")).all() if m.phrase][:10]
+                              Message.intent == "information")).all()
+    info = [m.text if m.text else m.phrase for m in info_messages][:10]
     return {"id": concept.id, "name": concept.name, "module": concept.module,
+            "description": concept.description,
             "confidence": result["confidence"], "tier": result["tier"],
             "status": verdict.verdict if verdict else None,
             "stats": {**stats.__dict__,
+                      "enrolled": enrolled,
+                      "min_students": settings.min_students,
+                      "course_quiz_avg": course_quiz_avg,
                       "students_confused": _small_count(stats.students_confused),
-                      "confusion_msgs": _small_count(stats.confusion_msgs)},
+                      "confusion_msgs": _small_count(stats.confusion_msgs),
+                      "info_msgs": len(info_messages)},
             "share": result["share"], "share_lower": result["share_lower"],
-            "signals": _signals(result), "groups": await groups(s, concept, confusion),
+            "signals": _signals(result), "groups": await groups(s, concept, confusion, per_student),
             "not_counted_evidence": info}

@@ -1,9 +1,9 @@
-
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import hashlib
 import pytest
 from datetime import datetime
 from fastapi.testclient import TestClient
@@ -15,6 +15,9 @@ from app.config import settings
 from app.db import Base, get_db
 from app.main import app
 from app.models import Learner, Concept, Task, Attempt
+
+TEST_LEARNER_TOKEN = "test-learner-access-token"
+TEST_SERVICE_TOKEN = "test-renaissance-service-token"
 
 
 @pytest.fixture()
@@ -42,12 +45,10 @@ def db_session():
 
 @pytest.fixture()
 def client(db_session, monkeypatch):
-    test_token = "test-renaissance-service-token"
-
     monkeypatch.setattr(
         settings,
         "renaissance_service_token",
-        test_token,
+        TEST_SERVICE_TOKEN,
     )
 
     def override_get_db():
@@ -62,7 +63,36 @@ def client(db_session, monkeypatch):
         with TestClient(
             app,
             headers={
-                "X-Renaissance-Service-Token": test_token,
+                "X-Renaissance-Service-Token": TEST_SERVICE_TOKEN,
+                "X-Renaissance-Learner-Token": TEST_LEARNER_TOKEN,
+            },
+        ) as test_client:
+            yield test_client
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture()
+def service_client(db_session, monkeypatch):
+    monkeypatch.setattr(
+        settings,
+        "renaissance_service_token",
+        TEST_SERVICE_TOKEN,
+    )
+
+    def override_get_db():
+        try:
+            yield db_session
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        with TestClient(
+            app,
+            headers={
+                "X-Renaissance-Service-Token": TEST_SERVICE_TOKEN,
             },
         ) as test_client:
             yield test_client
@@ -107,7 +137,12 @@ def make_task(db_session, concept):
 
 @pytest.fixture()
 def make_learner(db_session):
-    def _make_learner(condition="controlled_ai"):
+    def _make_learner(condition="controlled_ai", learner_token=TEST_LEARNER_TOKEN):
+        token_hash = (
+            hashlib.sha256(learner_token.encode("utf-8")).hexdigest()
+            if learner_token
+            else None
+        )
         learner = Learner(
             prior_ability_score=0.5,
             condition=condition,
@@ -128,10 +163,12 @@ def make_learner(db_session):
             ),
             supported_phase_minutes=20,
             participation_status="active",
+            learner_access_token_hash=token_hash,
         )
         db_session.add(learner)
         db_session.commit()
         db_session.refresh(learner)
+        learner.provisioning_token = learner_token
         return learner
 
     return _make_learner

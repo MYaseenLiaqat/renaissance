@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, friendlyError, TopicListItem } from "../api";
+import MarkdownView from "../components/MarkdownView";
 
 type FormValues = { name: string; module_label: string; description: string };
 
@@ -99,11 +100,35 @@ export default function TopicsSetup() {
       <input required placeholder="One-sentence description" value={form.description} onChange={event => updateField("description", event.target.value)} />
       <div><button className="btn primary" disabled={saving || (editing === null && topics.length >= 10)}>{saving ? "Saving…" : editing === null ? "Add topic" : "Save changes"}</button>{editing !== null && <button type="button" className="btn" disabled={saving} onClick={cancelEdit}>Cancel</button>}</div>
     </form>
-    {loading ? <div className="state"><p>Loading topics…</p></div> : topics.length === 0 ? <div className="empty panel">No topics yet.<small>Add the first topic above so Tangled can organise course questions.</small></div> :
-      <div className="card-grid">{topics.map(topic => <article className="topic-card" key={topic.id}>
-        <h3>{topic.name}</h3><p className="note">{topic.module_label}</p><p>{topic.description}</p>
-        <button className="btn" disabled={saving || deleting === topic.id} onClick={() => startEdit(topic)}>Edit</button>{" "}
-        <button className="btn" disabled={saving || deleting === topic.id} onClick={() => remove(topic)}>{deleting === topic.id ? "Deleting…" : "Delete"}</button>
-      </article>)}</div>}
+    {loading ? <div className="state"><p>Loading topics…</p></div> : topics.length === 0 ? <div className="empty panel">No topics yet.<small>Add the first topic above so Renaissance can organise course questions.</small></div> :
+      <div className="card-grid">
+        {topics.map(topic => (
+          <article className="topic-card" key={topic.id}>
+            <div className="topic-card-header">
+              <span className="pill topic-module-pill">{topic.module_label}</span>
+              <h3 className="topic-card-title">{topic.name}</h3>
+            </div>
+            <div className="topic-card-desc">
+              <MarkdownView content={topic.description} />
+            </div>
+            <div className="topic-card-actions">
+              <button
+                className="btn btn-small"
+                disabled={saving || deleting === topic.id}
+                onClick={() => startEdit(topic)}
+              >
+                Edit
+              </button>
+              <button
+                className="btn btn-small"
+                disabled={saving || deleting === topic.id}
+                onClick={() => remove(topic)}
+              >
+                {deleting === topic.id ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>}
   </main>;
 }
